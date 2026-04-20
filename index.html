@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenTower S3 File Browser</title>
+    <title>OpenTower File Browser</title>
     <style>
         * {
             margin: 0;
@@ -38,6 +38,22 @@
             font-size: 0.85rem;
             color: #a0aec0;
             font-family: 'Courier New', monospace;
+        }
+
+        .meta-bar {
+            background: #edf2f7;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 8px 24px;
+            font-size: 0.8rem;
+            color: #718096;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .meta-bar .refresh-note {
+            color: #e53e3e;
+            font-weight: 500;
         }
 
         .breadcrumb {
@@ -77,6 +93,25 @@
             padding: 0 24px;
         }
 
+        .search-bar {
+            margin-bottom: 16px;
+        }
+
+        .search-bar input {
+            width: 100%;
+            padding: 10px 16px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .search-bar input:focus {
+            border-color: #3182ce;
+            box-shadow: 0 0 0 3px rgba(49,130,206,0.1);
+        }
+
         .file-table {
             background: #fff;
             border-radius: 8px;
@@ -103,6 +138,17 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
             color: #718096;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .file-table th:hover {
+            color: #2d3748;
+        }
+
+        .file-table th .sort-arrow {
+            margin-left: 4px;
+            font-size: 0.7rem;
         }
 
         .file-table td {
@@ -155,6 +201,26 @@
         .file-table .date-cell {
             color: #718096;
             white-space: nowrap;
+        }
+
+        .file-table .download-cell {
+            text-align: center;
+        }
+
+        .file-table .download-cell a {
+            display: inline-block;
+            padding: 4px 12px;
+            background: #3182ce;
+            color: #fff;
+            border-radius: 4px;
+            text-decoration: none;
+            font-size: 0.8rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .file-table .download-cell a:hover {
+            background: #2c5282;
         }
 
         .loading {
@@ -221,6 +287,12 @@
             .breadcrumb {
                 padding: 10px 16px;
             }
+
+            .meta-bar {
+                flex-direction: column;
+                gap: 4px;
+                align-items: flex-start;
+            }
         }
     </style>
 </head>
@@ -232,90 +304,120 @@
         </div>
     </header>
 
+    <div class="meta-bar" id="metaBar">
+        <span id="metaInfo">Loading manifest...</span>
+        <span id="metaExpiry"></span>
+    </div>
+
     <div class="breadcrumb" id="breadcrumb"></div>
 
     <div class="container">
+        <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="Search files..." oninput="handleSearch(this.value)">
+        </div>
         <div id="content">
             <div class="loading">
                 <div class="spinner"></div>
-                <p>Loading bucket contents...</p>
+                <p>Loading file manifest...</p>
             </div>
         </div>
     </div>
 
-    <!-- AWS SDK v3 from CDN (S3 client bundle) -->
-    <script src="https://cdn.jsdelivr.net/npm/@aws-sdk/client-s3@3.540.0/dist-es/bundle.min.js"></script>
     <script>
     (function() {
         'use strict';
 
-        // ─── Configuration ───────────────────────────────────────────────
-        const CONFIG = {
-            bucket: 'opentower-s3-crown',
-            region: 'us-east-2',
-            // For public bucket access, we use unsigned requests.
-            // If you need Cognito auth later, set identityPoolId here:
-            // identityPoolId: 'us-east-2:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-        };
-
-        // ─── State ───────────────────────────────────────────────────────
+        let manifest = null;
         let currentPrefix = '';
+        let searchQuery = '';
+        let sortField = 'name';
+        let sortAsc = true;
 
-        // ─── S3 List via fetch (unsigned, public bucket) ─────────────────
-        // Using the S3 REST API directly avoids SDK bundle issues.
-        // For a public bucket with s3:ListBucket allowed, we can call
-        // the ListObjectsV2 endpoint directly.
-
-        async function listObjects(prefix) {
-            const params = new URLSearchParams({
-                'list-type': '2',
-                'delimiter': '/',
-                'prefix': prefix
-            });
-
-            const url = `https://${CONFIG.bucket}.s3.${CONFIG.region}.amazonaws.com/?${params}`;
-
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`S3 returned ${response.status}: ${response.statusText}`);
+        async function loadManifest() {
+            try {
+                const resp = await fetch('manifest.json?' + Date.now());
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                manifest = await resp.json();
+                updateMetaBar();
+                const hash = window.location.hash.slice(1);
+                navigateTo(hash || '');
+            } catch (err) {
+                showError('Could not load manifest.json. The file listing may need to be regenerated. Error: ' + err.message);
             }
-
-            const text = await response.text();
-            const parser = new DOMParser();
-            const xml = parser.parseFromString(text, 'application/xml');
-
-            // Parse folders (CommonPrefixes)
-            const folders = [];
-            const prefixNodes = xml.querySelectorAll('CommonPrefixes > Prefix');
-            prefixNodes.forEach(node => {
-                const fullPrefix = node.textContent;
-                const name = fullPrefix.slice(prefix.length).replace(/\/$/, '');
-                if (name) {
-                    folders.push({ name, prefix: fullPrefix });
-                }
-            });
-
-            // Parse files (Contents)
-            const files = [];
-            const contents = xml.querySelectorAll('ListBucketResult > Contents');
-            contents.forEach(node => {
-                const key = node.querySelector('Key').textContent;
-                const name = key.slice(prefix.length);
-                // Skip the prefix itself (directory marker)
-                if (!name || name === '') return;
-                const size = parseInt(node.querySelector('Size').textContent, 10);
-                const lastModified = node.querySelector('LastModified').textContent;
-                files.push({ name, key, size, lastModified });
-            });
-
-            // Check if truncated
-            const isTruncatedNode = xml.querySelector('IsTruncated');
-            const isTruncated = isTruncatedNode && isTruncatedNode.textContent === 'true';
-
-            return { folders, files, isTruncated };
         }
 
-        // ─── UI Rendering ────────────────────────────────────────────────
+        function updateMetaBar() {
+            const info = document.getElementById('metaInfo');
+            const expiry = document.getElementById('metaExpiry');
+            const generated = new Date(manifest.generated_at);
+            info.textContent = `${manifest.total_files} files | ${formatFileSize(manifest.total_size)} total | Updated: ${generated.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
+
+            const expiresAt = new Date(manifest.expires_at);
+            const now = new Date();
+            if (expiresAt < now) {
+                expiry.className = 'refresh-note';
+                expiry.textContent = 'Links expired -- manifest needs refresh';
+            } else {
+                const daysLeft = Math.ceil((expiresAt - now) / 86400000);
+                expiry.textContent = `Links valid for ${daysLeft} more day${daysLeft !== 1 ? 's' : ''}`;
+            }
+        }
+
+        function getFileTree() {
+            if (!manifest) return { folders: [], files: [] };
+
+            const prefix = currentPrefix;
+            const folders = new Set();
+            const files = [];
+
+            for (const entry of manifest.files) {
+                if (!entry.key.startsWith(prefix)) continue;
+                const remainder = entry.key.slice(prefix.length);
+                if (!remainder) continue;
+
+                if (remainder.includes('/')) {
+                    const folderName = remainder.split('/')[0];
+                    folders.add(folderName);
+                } else {
+                    if (searchQuery) {
+                        if (!remainder.toLowerCase().includes(searchQuery.toLowerCase())) continue;
+                    }
+                    files.push({
+                        name: remainder,
+                        key: entry.key,
+                        size: entry.size,
+                        lastModified: entry.last_modified,
+                        downloadUrl: entry.download_url
+                    });
+                }
+            }
+
+            let folderList = [...folders].map(name => ({
+                name,
+                prefix: prefix + name + '/'
+            }));
+
+            if (searchQuery) {
+                folderList = folderList.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
+            }
+
+            folderList.sort((a, b) => a.name.localeCompare(b.name));
+            sortFiles(files);
+
+            return { folders: folderList, files };
+        }
+
+        function sortFiles(files) {
+            files.sort((a, b) => {
+                let cmp = 0;
+                switch (sortField) {
+                    case 'name': cmp = a.name.localeCompare(b.name); break;
+                    case 'size': cmp = a.size - b.size; break;
+                    case 'date': cmp = new Date(a.lastModified) - new Date(b.lastModified); break;
+                }
+                return sortAsc ? cmp : -cmp;
+            });
+        }
 
         function formatFileSize(bytes) {
             if (bytes === 0) return '0 B';
@@ -339,20 +441,22 @@
         function getFileIcon(filename) {
             const ext = filename.split('.').pop().toLowerCase();
             const iconMap = {
-                pdf: '\uD83D\uDCC4',
-                doc: '\uD83D\uDCC4', docx: '\uD83D\uDCC4',
-                xls: '\uD83D\uDCCA', xlsx: '\uD83D\uDCCA', csv: '\uD83D\uDCCA',
-                jpg: '\uD83D\uDDBC\uFE0F', jpeg: '\uD83D\uDDBC\uFE0F', png: '\uD83D\uDDBC\uFE0F', gif: '\uD83D\uDDBC\uFE0F', svg: '\uD83D\uDDBC\uFE0F',
-                zip: '\uD83D\uDCE6', gz: '\uD83D\uDCE6', tar: '\uD83D\uDCE6', rar: '\uD83D\uDCE6',
-                mp4: '\uD83C\uDFAC', mov: '\uD83C\uDFAC', avi: '\uD83C\uDFAC',
-                mp3: '\uD83C\uDFB5', wav: '\uD83C\uDFB5',
-                py: '\uD83D\uDC0D', js: '\u26A1', html: '\uD83C\uDF10', css: '\uD83C\uDFA8',
-                json: '{}', xml: '\uD83D\uDCCB',
-                txt: '\uD83D\uDCC3', md: '\uD83D\uDCC3', log: '\uD83D\uDCC3',
-                dwg: '\uD83D\uDCD0', dxf: '\uD83D\uDCD0', dgn: '\uD83D\uDCD0',
-                ifc: '\uD83C\uDFD7\uFE0F', rvt: '\uD83C\uDFD7\uFE0F',
+                pdf: '📄', doc: '📄', docx: '📄',
+                xls: '📊', xlsx: '📊', csv: '📊',
+                jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️', tif: '🖼️', tiff: '🖼️',
+                zip: '📦', gz: '📦', tar: '📦', rar: '📦', '7z': '📦',
+                mp4: '🎬', mov: '🎬', avi: '🎬',
+                mp3: '🎵', wav: '🎵',
+                py: '🐍', js: '⚡', html: '🌐', css: '🎨',
+                json: '{}', xml: '📋',
+                txt: '📃', md: '📃', log: '📃',
+                dwg: '📐', dxf: '📐', dgn: '📐',
+                ifc: '🏗️', rvt: '🏗️',
+                las: '🗺️', laz: '🗺️', e57: '🗺️',
+                obj: '🟩', fbx: '🟩', '3ds': '🟩', stl: '🟩',
+                shp: '🗺️', kml: '🗺️', kmz: '🗺️',
             };
-            return iconMap[ext] || '\uD83D\uDCC4';
+            return iconMap[ext] || '📄';
         }
 
         function renderBreadcrumb(prefix) {
@@ -360,7 +464,6 @@
             const parts = prefix.split('/').filter(Boolean);
 
             let html = '<a onclick="navigateTo(\'\')">Root</a>';
-
             let accumulated = '';
             parts.forEach((part, i) => {
                 accumulated += part + '/';
@@ -375,114 +478,113 @@
             breadcrumb.innerHTML = html;
         }
 
-        function renderContent(data) {
-            const { folders, files, isTruncated } = data;
+        function renderContent() {
+            const { folders, files } = getFileTree();
             const contentEl = document.getElementById('content');
 
             if (folders.length === 0 && files.length === 0) {
-                contentEl.innerHTML = '<div class="empty"><p>This folder is empty.</p></div>';
+                contentEl.innerHTML = searchQuery
+                    ? '<div class="empty"><p>No files match your search.</p></div>'
+                    : '<div class="empty"><p>This folder is empty.</p></div>';
                 return;
             }
 
+            const sortArrow = (field) => {
+                if (sortField !== field) return '';
+                return `<span class="sort-arrow">${sortAsc ? '▲' : '▼'}</span>`;
+            };
+
             let html = '<div class="file-table"><table>';
-            html += '<thead><tr><th>Name</th><th>Size</th><th class="date-cell">Last Modified</th></tr></thead>';
+            html += `<thead><tr>
+                <th onclick="handleSort('name')">Name${sortArrow('name')}</th>
+                <th onclick="handleSort('size')">Size${sortArrow('size')}</th>
+                <th class="date-cell" onclick="handleSort('date')">Last Modified${sortArrow('date')}</th>
+                <th>Download</th>
+            </tr></thead>`;
             html += '<tbody>';
 
-            // Parent directory link
-            if (currentPrefix !== '') {
+            if (currentPrefix !== '' && !searchQuery) {
                 const parentPrefix = currentPrefix.split('/').filter(Boolean).slice(0, -1).join('/');
                 const parentPath = parentPrefix ? parentPrefix + '/' : '';
                 html += `<tr>
                     <td><div class="name-cell">
-                        <span class="icon folder-icon">\uD83D\uDCC1</span>
+                        <span class="icon folder-icon">📁</span>
                         <a onclick="navigateTo('${parentPath}')">..</a>
                     </div></td>
                     <td class="size-cell">-</td>
                     <td class="date-cell">-</td>
+                    <td></td>
                 </tr>`;
             }
 
-            // Folders
             folders.forEach(folder => {
                 html += `<tr>
                     <td><div class="name-cell">
-                        <span class="icon folder-icon">\uD83D\uDCC1</span>
+                        <span class="icon folder-icon">📁</span>
                         <a onclick="navigateTo('${folder.prefix}')">${folder.name}</a>
                     </div></td>
                     <td class="size-cell">-</td>
                     <td class="date-cell">-</td>
+                    <td></td>
                 </tr>`;
             });
 
-            // Files
             files.forEach(file => {
-                const downloadUrl = `https://${CONFIG.bucket}.s3.${CONFIG.region}.amazonaws.com/${encodeURIComponent(file.key).replace(/%2F/g, '/')}`;
                 html += `<tr>
                     <td><div class="name-cell">
                         <span class="icon file-icon">${getFileIcon(file.name)}</span>
-                        <a href="${downloadUrl}" target="_blank" rel="noopener">${file.name}</a>
+                        <a href="${file.downloadUrl}" target="_blank" rel="noopener">${file.name}</a>
                     </div></td>
                     <td class="size-cell">${formatFileSize(file.size)}</td>
                     <td class="date-cell">${formatDate(file.lastModified)}</td>
+                    <td class="download-cell"><a href="${file.downloadUrl}" download>Download</a></td>
                 </tr>`;
             });
 
             html += '</tbody></table>';
 
-            // Stats footer
             const totalSize = files.reduce((sum, f) => sum + f.size, 0);
             html += `<div class="stats">${folders.length} folder(s), ${files.length} file(s)`;
-            if (files.length > 0) html += ` | Total size: ${formatFileSize(totalSize)}`;
-            if (isTruncated) html += ' | <strong>Results truncated (1000+ objects)</strong>';
-            html += '</div>';
+            if (files.length > 0) html += ` | ${formatFileSize(totalSize)} in this view`;
+            html += '</div></div>';
 
-            html += '</div>';
             contentEl.innerHTML = html;
         }
 
         function showError(message) {
-            const contentEl = document.getElementById('content');
-            contentEl.innerHTML = `<div class="error">
-                <h3>Error Loading Bucket</h3>
+            document.getElementById('content').innerHTML = `<div class="error">
+                <h3>Error</h3>
                 <p>${message}</p>
                 <p style="margin-top:12px;font-size:0.85rem;color:#718096;">
-                    Ensure the bucket has a public read policy and CORS is configured.<br>
-                    See the deploy script for details.
+                    Run <code>python generate_s3_manifest.py</code> to refresh the file listing.
                 </p>
             </div>`;
         }
 
-        // ─── Navigation ──────────────────────────────────────────────────
-
-        window.navigateTo = async function(prefix) {
+        window.navigateTo = function(prefix) {
             currentPrefix = prefix;
+            searchQuery = '';
+            document.getElementById('searchInput').value = '';
             renderBreadcrumb(prefix);
-
-            // Update URL hash for bookmarking
             window.location.hash = prefix ? '#' + prefix : '';
-
-            const contentEl = document.getElementById('content');
-            contentEl.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading...</p></div>';
-
-            try {
-                const data = await listObjects(prefix);
-                renderContent(data);
-            } catch (err) {
-                console.error('S3 list error:', err);
-                showError(err.message);
-            }
+            renderContent();
         };
 
-        // ─── Init ────────────────────────────────────────────────────────
+        window.handleSearch = function(query) {
+            searchQuery = query;
+            renderContent();
+        };
 
-        function init() {
-            // Check URL hash for initial path
-            const hash = window.location.hash.slice(1);
-            const initialPrefix = hash || '';
-            navigateTo(initialPrefix);
-        }
+        window.handleSort = function(field) {
+            if (sortField === field) {
+                sortAsc = !sortAsc;
+            } else {
+                sortField = field;
+                sortAsc = true;
+            }
+            renderContent();
+        };
 
-        // Handle browser back/forward
         window.addEventListener('hashchange', () => {
             const prefix = window.location.hash.slice(1);
             if (prefix !== currentPrefix) {
@@ -490,7 +592,7 @@
             }
         });
 
-        init();
+        loadManifest();
     })();
     </script>
 </body>
