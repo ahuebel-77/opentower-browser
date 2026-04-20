@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenTower S3 File Browser</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            min-height: 100vh;
+        }
+
+        header {
+            background: #1a1a2e;
+            color: #fff;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        header h1 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+
+        header .bucket-name {
+            font-size: 0.85rem;
+            color: #a0aec0;
+            font-family: 'Courier New', monospace;
+        }
+
+        .breadcrumb {
+            background: #fff;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.9rem;
+            flex-wrap: wrap;
+        }
+
+        .breadcrumb a {
+            color: #3182ce;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+
+        .breadcrumb .separator {
+            color: #a0aec0;
+            user-select: none;
+        }
+
+        .breadcrumb .current {
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 24px auto;
+            padding: 0 24px;
+        }
+
+        .file-table {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .file-table table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .file-table thead {
+            background: #f7fafc;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .file-table th {
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #718096;
+        }
+
+        .file-table td {
+            padding: 10px 16px;
+            border-bottom: 1px solid #edf2f7;
+            font-size: 0.9rem;
+        }
+
+        .file-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .file-table tr:hover {
+            background: #f7fafc;
+        }
+
+        .file-table .name-cell {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .file-table .name-cell a {
+            color: #2d3748;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .file-table .name-cell a:hover {
+            color: #3182ce;
+            text-decoration: underline;
+        }
+
+        .file-table .name-cell .icon {
+            font-size: 1.2rem;
+            width: 24px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .file-table .folder-icon {
+            color: #ecc94b;
+        }
+
+        .file-table .file-icon {
+            color: #a0aec0;
+        }
+
+        .file-table .size-cell,
+        .file-table .date-cell {
+            color: #718096;
+            white-space: nowrap;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+            color: #718096;
+        }
+
+        .loading .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #e2e8f0;
+            border-top-color: #3182ce;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .error {
+            text-align: center;
+            padding: 40px 20px;
+            color: #e53e3e;
+            background: #fff5f5;
+            border: 1px solid #fed7d7;
+            border-radius: 8px;
+            margin: 24px 0;
+        }
+
+        .error h3 {
+            margin-bottom: 8px;
+        }
+
+        .empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: #a0aec0;
+        }
+
+        .stats {
+            padding: 12px 16px;
+            font-size: 0.8rem;
+            color: #a0aec0;
+            border-top: 1px solid #edf2f7;
+            background: #f7fafc;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 12px;
+            }
+
+            .file-table .date-cell {
+                display: none;
+            }
+
+            header {
+                padding: 12px 16px;
+            }
+
+            .breadcrumb {
+                padding: 10px 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>OpenTower File Browser</h1>
+            <div class="bucket-name">s3://opentower-s3-crown</div>
+        </div>
+    </header>
+
+    <div class="breadcrumb" id="breadcrumb"></div>
+
+    <div class="container">
+        <div id="content">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading bucket contents...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- AWS SDK v3 from CDN (S3 client bundle) -->
+    <script src="https://cdn.jsdelivr.net/npm/@aws-sdk/client-s3@3.540.0/dist-es/bundle.min.js"></script>
+    <script>
+    (function() {
+        'use strict';
+
+        // ─── Configuration ───────────────────────────────────────────────
+        const CONFIG = {
+            bucket: 'opentower-s3-crown',
+            region: 'us-east-2',
+            // For public bucket access, we use unsigned requests.
+            // If you need Cognito auth later, set identityPoolId here:
+            // identityPoolId: 'us-east-2:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+        };
+
+        // ─── State ───────────────────────────────────────────────────────
+        let currentPrefix = '';
+
+        // ─── S3 List via fetch (unsigned, public bucket) ─────────────────
+        // Using the S3 REST API directly avoids SDK bundle issues.
+        // For a public bucket with s3:ListBucket allowed, we can call
+        // the ListObjectsV2 endpoint directly.
+
+        async function listObjects(prefix) {
+            const params = new URLSearchParams({
+                'list-type': '2',
+                'delimiter': '/',
+                'prefix': prefix
+            });
+
+            const url = `https://${CONFIG.bucket}.s3.${CONFIG.region}.amazonaws.com/?${params}`;
+
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`S3 returned ${response.status}: ${response.statusText}`);
+            }
+
+            const text = await response.text();
+            const parser = new DOMParser();
+            const xml = parser.parseFromString(text, 'application/xml');
+
+            // Parse folders (CommonPrefixes)
+            const folders = [];
+            const prefixNodes = xml.querySelectorAll('CommonPrefixes > Prefix');
+            prefixNodes.forEach(node => {
+                const fullPrefix = node.textContent;
+                const name = fullPrefix.slice(prefix.length).replace(/\/$/, '');
+                if (name) {
+                    folders.push({ name, prefix: fullPrefix });
+                }
+            });
+
+            // Parse files (Contents)
+            const files = [];
+            const contents = xml.querySelectorAll('ListBucketResult > Contents');
+            contents.forEach(node => {
+                const key = node.querySelector('Key').textContent;
+                const name = key.slice(prefix.length);
+                // Skip the prefix itself (directory marker)
+                if (!name || name === '') return;
+                const size = parseInt(node.querySelector('Size').textContent, 10);
+                const lastModified = node.querySelector('LastModified').textContent;
+                files.push({ name, key, size, lastModified });
+            });
+
+            // Check if truncated
+            const isTruncatedNode = xml.querySelector('IsTruncated');
+            const isTruncated = isTruncatedNode && isTruncatedNode.textContent === 'true';
+
+            return { folders, files, isTruncated };
+        }
+
+        // ─── UI Rendering ────────────────────────────────────────────────
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            const val = (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0);
+            return `${val} ${units[i]}`;
+        }
+
+        function formatDate(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function getFileIcon(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const iconMap = {
+                pdf: '\uD83D\uDCC4',
+                doc: '\uD83D\uDCC4', docx: '\uD83D\uDCC4',
+                xls: '\uD83D\uDCCA', xlsx: '\uD83D\uDCCA', csv: '\uD83D\uDCCA',
+                jpg: '\uD83D\uDDBC\uFE0F', jpeg: '\uD83D\uDDBC\uFE0F', png: '\uD83D\uDDBC\uFE0F', gif: '\uD83D\uDDBC\uFE0F', svg: '\uD83D\uDDBC\uFE0F',
+                zip: '\uD83D\uDCE6', gz: '\uD83D\uDCE6', tar: '\uD83D\uDCE6', rar: '\uD83D\uDCE6',
+                mp4: '\uD83C\uDFAC', mov: '\uD83C\uDFAC', avi: '\uD83C\uDFAC',
+                mp3: '\uD83C\uDFB5', wav: '\uD83C\uDFB5',
+                py: '\uD83D\uDC0D', js: '\u26A1', html: '\uD83C\uDF10', css: '\uD83C\uDFA8',
+                json: '{}', xml: '\uD83D\uDCCB',
+                txt: '\uD83D\uDCC3', md: '\uD83D\uDCC3', log: '\uD83D\uDCC3',
+                dwg: '\uD83D\uDCD0', dxf: '\uD83D\uDCD0', dgn: '\uD83D\uDCD0',
+                ifc: '\uD83C\uDFD7\uFE0F', rvt: '\uD83C\uDFD7\uFE0F',
+            };
+            return iconMap[ext] || '\uD83D\uDCC4';
+        }
+
+        function renderBreadcrumb(prefix) {
+            const breadcrumb = document.getElementById('breadcrumb');
+            const parts = prefix.split('/').filter(Boolean);
+
+            let html = '<a onclick="navigateTo(\'\')">Root</a>';
+
+            let accumulated = '';
+            parts.forEach((part, i) => {
+                accumulated += part + '/';
+                html += '<span class="separator">/</span>';
+                if (i === parts.length - 1) {
+                    html += `<span class="current">${part}</span>`;
+                } else {
+                    html += `<a onclick="navigateTo('${accumulated}')">${part}</a>`;
+                }
+            });
+
+            breadcrumb.innerHTML = html;
+        }
+
+        function renderContent(data) {
+            const { folders, files, isTruncated } = data;
+            const contentEl = document.getElementById('content');
+
+            if (folders.length === 0 && files.length === 0) {
+                contentEl.innerHTML = '<div class="empty"><p>This folder is empty.</p></div>';
+                return;
+            }
+
+            let html = '<div class="file-table"><table>';
+            html += '<thead><tr><th>Name</th><th>Size</th><th class="date-cell">Last Modified</th></tr></thead>';
+            html += '<tbody>';
+
+            // Parent directory link
+            if (currentPrefix !== '') {
+                const parentPrefix = currentPrefix.split('/').filter(Boolean).slice(0, -1).join('/');
+                const parentPath = parentPrefix ? parentPrefix + '/' : '';
+                html += `<tr>
+                    <td><div class="name-cell">
+                        <span class="icon folder-icon">\uD83D\uDCC1</span>
+                        <a onclick="navigateTo('${parentPath}')">..</a>
+                    </div></td>
+                    <td class="size-cell">-</td>
+                    <td class="date-cell">-</td>
+                </tr>`;
+            }
+
+            // Folders
+            folders.forEach(folder => {
+                html += `<tr>
+                    <td><div class="name-cell">
+                        <span class="icon folder-icon">\uD83D\uDCC1</span>
+                        <a onclick="navigateTo('${folder.prefix}')">${folder.name}</a>
+                    </div></td>
+                    <td class="size-cell">-</td>
+                    <td class="date-cell">-</td>
+                </tr>`;
+            });
+
+            // Files
+            files.forEach(file => {
+                const downloadUrl = `https://${CONFIG.bucket}.s3.${CONFIG.region}.amazonaws.com/${encodeURIComponent(file.key).replace(/%2F/g, '/')}`;
+                html += `<tr>
+                    <td><div class="name-cell">
+                        <span class="icon file-icon">${getFileIcon(file.name)}</span>
+                        <a href="${downloadUrl}" target="_blank" rel="noopener">${file.name}</a>
+                    </div></td>
+                    <td class="size-cell">${formatFileSize(file.size)}</td>
+                    <td class="date-cell">${formatDate(file.lastModified)}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table>';
+
+            // Stats footer
+            const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+            html += `<div class="stats">${folders.length} folder(s), ${files.length} file(s)`;
+            if (files.length > 0) html += ` | Total size: ${formatFileSize(totalSize)}`;
+            if (isTruncated) html += ' | <strong>Results truncated (1000+ objects)</strong>';
+            html += '</div>';
+
+            html += '</div>';
+            contentEl.innerHTML = html;
+        }
+
+        function showError(message) {
+            const contentEl = document.getElementById('content');
+            contentEl.innerHTML = `<div class="error">
+                <h3>Error Loading Bucket</h3>
+                <p>${message}</p>
+                <p style="margin-top:12px;font-size:0.85rem;color:#718096;">
+                    Ensure the bucket has a public read policy and CORS is configured.<br>
+                    See the deploy script for details.
+                </p>
+            </div>`;
+        }
+
+        // ─── Navigation ──────────────────────────────────────────────────
+
+        window.navigateTo = async function(prefix) {
+            currentPrefix = prefix;
+            renderBreadcrumb(prefix);
+
+            // Update URL hash for bookmarking
+            window.location.hash = prefix ? '#' + prefix : '';
+
+            const contentEl = document.getElementById('content');
+            contentEl.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading...</p></div>';
+
+            try {
+                const data = await listObjects(prefix);
+                renderContent(data);
+            } catch (err) {
+                console.error('S3 list error:', err);
+                showError(err.message);
+            }
+        };
+
+        // ─── Init ────────────────────────────────────────────────────────
+
+        function init() {
+            // Check URL hash for initial path
+            const hash = window.location.hash.slice(1);
+            const initialPrefix = hash || '';
+            navigateTo(initialPrefix);
+        }
+
+        // Handle browser back/forward
+        window.addEventListener('hashchange', () => {
+            const prefix = window.location.hash.slice(1);
+            if (prefix !== currentPrefix) {
+                navigateTo(prefix);
+            }
+        });
+
+        init();
+    })();
+    </script>
+</body>
+</html>
