@@ -1,0 +1,94 @@
+name: Refresh S3 Manifest
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6 AM UTC (1 AM CT)
+  workflow_dispatch: {}   # Manual trigger from GitHub UI
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install boto3
+
+      - name: Generate manifest
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          python - <<'PYEOF'
+          import boto3, json
+          from botocore.config import Config
+          from datetime import datetime, timedelta, timezone
+
+          BUCKET = "opentower-s3-crown"
+          REGION = "us-east-2"
+          EXPIRY_DAYS = 7
+
+          s3 = boto3.client(
+              "s3",
+              region_name=REGION,
+              config=Config(signature_version="s3v4"),
+          )
+
+          objects = []
+          paginator = s3.get_paginator("list_objects_v2")
+          for page in paginator.paginate(Bucket=BUCKET):
+              for obj in page.get("Contents", []):
+                  objects.append({
+                      "key": obj["Key"],
+                      "size": obj["Size"],
+                      "last_modified": obj["LastModified"].isoformat(),
+                  })
+
+          entries = []
+          for obj in objects:
+              if obj["size"] == 0 and obj["key"].endswith("/"):
+                  continue
+              url = s3.generate_presigned_url(
+                  "get_object",
+                  Params={"Bucket": BUCKET, "Key": obj["key"]},
+                  ExpiresIn=EXPIRY_DAYS * 86400,
+              )
+              entries.append({
+                  "key": obj["key"],
+                  "size": obj["size"],
+                  "last_modified": obj["last_modified"],
+                  "download_url": url,
+              })
+
+          now = datetime.now(timezone.utc)
+          manifest = {
+              "generated_at": now.isoformat(),
+              "expires_at": (now + timedelta(days=EXPIRY_DAYS)).isoformat(),
+              "bucket": BUCKET,
+              "region": REGION,
+              "total_files": len(entries),
+              "total_size": sum(e["size"] for e in entries),
+              "url_expiry_days": EXPIRY_DAYS,
+              "files": entries,
+          }
+
+          with open("manifest.json", "w") as f:
+              json.dump(manifest, f, indent=2)
+
+          print(f"Generated manifest: {len(entries)} files, {sum(e['size'] for e in entries) / 1024 / 1024:.1f} MB total")
+          PYEOF
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "auto-refresh manifest ($(date -u +%Y-%m-%d))"
+          git push
