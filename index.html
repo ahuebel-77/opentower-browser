@@ -112,12 +112,79 @@
             box-shadow: 0 0 0 3px rgba(49,130,206,0.1);
         }
 
+        /* Action bar for multi-select */
+        .action-bar {
+            display: none;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: #1a1a2e;
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 8px 8px 0 0;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            margin-bottom: 0;
+        }
+
+        .action-bar.visible {
+            display: flex;
+        }
+
+        .action-bar .selection-info {
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .action-bar .action-buttons {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .action-bar .btn {
+            padding: 6px 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s, opacity 0.2s;
+        }
+
+        .action-bar .btn-download {
+            background: #3182ce;
+            color: #fff;
+        }
+
+        .action-bar .btn-download:hover {
+            background: #2b6cb0;
+        }
+
+        .action-bar .btn-clear {
+            background: transparent;
+            color: #a0aec0;
+            border: 1px solid #4a5568;
+        }
+
+        .action-bar .btn-clear:hover {
+            background: #2d3748;
+            color: #fff;
+        }
+
         .file-table {
             background: #fff;
             border-radius: 8px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.08);
             overflow: hidden;
             width: 100%;
+        }
+
+        /* When action bar is visible, remove top border-radius from file-table */
+        .action-bar.visible + .file-table {
+            border-radius: 0 0 8px 8px;
         }
 
         .file-table table {
@@ -151,6 +218,12 @@
             font-size: 0.7rem;
         }
 
+        .file-table th.checkbox-col {
+            width: 40px;
+            text-align: center;
+            cursor: default;
+        }
+
         .file-table td {
             padding: 10px 16px;
             border-bottom: 1px solid #edf2f7;
@@ -163,6 +236,26 @@
 
         .file-table tr:hover {
             background: #f7fafc;
+        }
+
+        .file-table tr.selected {
+            background: #ebf8ff;
+        }
+
+        .file-table tr.selected:hover {
+            background: #d6eaf8;
+        }
+
+        .file-table .checkbox-cell {
+            text-align: center;
+            width: 40px;
+        }
+
+        .file-table .checkbox-cell input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            accent-color: #3182ce;
         }
 
         .file-table .name-cell {
@@ -269,6 +362,25 @@
             color: #a0aec0;
             border-top: 1px solid #edf2f7;
             background: #f7fafc;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .stats .btn-download-all {
+            padding: 5px 14px;
+            background: #3182ce;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .stats .btn-download-all:hover {
+            background: #2c5282;
         }
 
         @media (max-width: 768px) {
@@ -292,6 +404,21 @@
                 flex-direction: column;
                 gap: 4px;
                 align-items: flex-start;
+            }
+
+            .action-bar {
+                flex-direction: column;
+                gap: 10px;
+                align-items: flex-start;
+            }
+
+            .action-bar .action-buttons {
+                width: 100%;
+            }
+
+            .action-bar .btn {
+                flex: 1;
+                text-align: center;
             }
         }
     </style>
@@ -332,6 +459,7 @@
         let searchQuery = '';
         let sortField = 'name';
         let sortAsc = true;
+        let selectedFiles = new Map(); // key -> file object
 
         async function loadManifest() {
             try {
@@ -478,6 +606,63 @@
             breadcrumb.innerHTML = html;
         }
 
+        function updateActionBar() {
+            const actionBar = document.getElementById('actionBar');
+            if (!actionBar) return;
+
+            if (selectedFiles.size === 0) {
+                actionBar.classList.remove('visible');
+                return;
+            }
+
+            actionBar.classList.add('visible');
+            let totalSize = 0;
+            selectedFiles.forEach(f => { totalSize += f.size; });
+            const infoEl = actionBar.querySelector('.selection-info');
+            infoEl.textContent = `${selectedFiles.size} file${selectedFiles.size !== 1 ? 's' : ''} selected (${formatFileSize(totalSize)})`;
+        }
+
+        function updateSelectAllCheckbox() {
+            const selectAllCb = document.getElementById('selectAllCheckbox');
+            if (!selectAllCb) return;
+
+            const { files } = getFileTree();
+            if (files.length === 0) {
+                selectAllCb.checked = false;
+                selectAllCb.indeterminate = false;
+                return;
+            }
+
+            const selectedCount = files.filter(f => selectedFiles.has(f.key)).length;
+            if (selectedCount === 0) {
+                selectAllCb.checked = false;
+                selectAllCb.indeterminate = false;
+            } else if (selectedCount === files.length) {
+                selectAllCb.checked = true;
+                selectAllCb.indeterminate = false;
+            } else {
+                selectAllCb.checked = false;
+                selectAllCb.indeterminate = true;
+            }
+        }
+
+        function triggerDownloads(files) {
+            if (files.length === 0) return;
+
+            // Use temporary <a> elements with staggered clicks to avoid popup blockers
+            files.forEach((file, index) => {
+                setTimeout(() => {
+                    const a = document.createElement('a');
+                    a.href = file.downloadUrl;
+                    a.download = file.name || '';
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                }, index * 300);
+            });
+        }
+
         function renderContent() {
             const { folders, files } = getFileTree();
             const contentEl = document.getElementById('content');
@@ -494,8 +679,18 @@
                 return `<span class="sort-arrow">${sortAsc ? '▲' : '▼'}</span>`;
             };
 
-            let html = '<div class="file-table"><table>';
+            // Action bar
+            let html = `<div class="action-bar${selectedFiles.size > 0 ? ' visible' : ''}" id="actionBar">
+                <span class="selection-info"></span>
+                <div class="action-buttons">
+                    <button class="btn btn-download" onclick="handleDownloadSelected()">Download Selected</button>
+                    <button class="btn btn-clear" onclick="handleClearSelection()">Clear Selection</button>
+                </div>
+            </div>`;
+
+            html += '<div class="file-table"><table>';
             html += `<thead><tr>
+                <th class="checkbox-col"><input type="checkbox" id="selectAllCheckbox" title="Select all files" onclick="handleSelectAll(this.checked)"></th>
                 <th onclick="handleSort('name')">Name${sortArrow('name')}</th>
                 <th onclick="handleSort('size')">Size${sortArrow('size')}</th>
                 <th class="date-cell" onclick="handleSort('date')">Last Modified${sortArrow('date')}</th>
@@ -507,6 +702,7 @@
                 const parentPrefix = currentPrefix.split('/').filter(Boolean).slice(0, -1).join('/');
                 const parentPath = parentPrefix ? parentPrefix + '/' : '';
                 html += `<tr>
+                    <td class="checkbox-cell"></td>
                     <td><div class="name-cell">
                         <span class="icon folder-icon">📁</span>
                         <a onclick="navigateTo('${parentPath}')">..</a>
@@ -519,6 +715,7 @@
 
             folders.forEach(folder => {
                 html += `<tr>
+                    <td class="checkbox-cell"></td>
                     <td><div class="name-cell">
                         <span class="icon folder-icon">📁</span>
                         <a onclick="navigateTo('${folder.prefix}')">${folder.name}</a>
@@ -530,7 +727,10 @@
             });
 
             files.forEach(file => {
-                html += `<tr>
+                const isSelected = selectedFiles.has(file.key);
+                const escapedKey = file.key.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                html += `<tr class="${isSelected ? 'selected' : ''}" data-file-key="${escapedKey}">
+                    <td class="checkbox-cell"><input type="checkbox" ${isSelected ? 'checked' : ''} onchange="handleFileCheckbox('${escapedKey}', this.checked)"></td>
                     <td><div class="name-cell">
                         <span class="icon file-icon">${getFileIcon(file.name)}</span>
                         <a href="${file.downloadUrl}" target="_blank" rel="noopener">${file.name}</a>
@@ -544,11 +744,19 @@
             html += '</tbody></table>';
 
             const totalSize = files.reduce((sum, f) => sum + f.size, 0);
-            html += `<div class="stats">${folders.length} folder(s), ${files.length} file(s)`;
+            html += `<div class="stats"><span>${folders.length} folder(s), ${files.length} file(s)`;
             if (files.length > 0) html += ` | ${formatFileSize(totalSize)} in this view`;
+            html += '</span>';
+            if (files.length > 0) {
+                html += `<button class="btn-download-all" onclick="handleDownloadAll()" title="Download all ${files.length} files in this view">Download All (${files.length})</button>`;
+            }
             html += '</div></div>';
 
             contentEl.innerHTML = html;
+
+            // Update action bar info after render
+            updateActionBar();
+            updateSelectAllCheckbox();
         }
 
         function showError(message) {
@@ -564,6 +772,7 @@
         window.navigateTo = function(prefix) {
             currentPrefix = prefix;
             searchQuery = '';
+            selectedFiles.clear();
             document.getElementById('searchInput').value = '';
             renderBreadcrumb(prefix);
             window.location.hash = prefix ? '#' + prefix : '';
@@ -572,6 +781,7 @@
 
         window.handleSearch = function(query) {
             searchQuery = query;
+            selectedFiles.clear();
             renderContent();
         };
 
@@ -583,6 +793,62 @@
                 sortAsc = true;
             }
             renderContent();
+        };
+
+        window.handleFileCheckbox = function(fileKey, checked) {
+            if (checked) {
+                // Find the file object for this key
+                const { files } = getFileTree();
+                const file = files.find(f => f.key === fileKey);
+                if (file) {
+                    selectedFiles.set(fileKey, file);
+                }
+            } else {
+                selectedFiles.delete(fileKey);
+            }
+            // Update row highlight
+            const row = document.querySelector(`tr[data-file-key="${fileKey.replace(/"/g, '\\"')}"]`);
+            if (row) {
+                row.classList.toggle('selected', checked);
+            }
+            updateActionBar();
+            updateSelectAllCheckbox();
+        };
+
+        window.handleSelectAll = function(checked) {
+            const { files } = getFileTree();
+            if (checked) {
+                files.forEach(f => selectedFiles.set(f.key, f));
+            } else {
+                files.forEach(f => selectedFiles.delete(f.key));
+            }
+            // Re-render to update all checkboxes and row highlights
+            renderContent();
+        };
+
+        window.handleClearSelection = function() {
+            selectedFiles.clear();
+            renderContent();
+        };
+
+        window.handleDownloadSelected = function() {
+            const filesToDownload = Array.from(selectedFiles.values());
+            if (filesToDownload.length === 0) return;
+
+            if (filesToDownload.length > 20) {
+                if (!confirm(`You are about to download ${filesToDownload.length} files. Continue?`)) return;
+            }
+            triggerDownloads(filesToDownload);
+        };
+
+        window.handleDownloadAll = function() {
+            const { files } = getFileTree();
+            if (files.length === 0) return;
+
+            if (files.length > 20) {
+                if (!confirm(`You are about to download all ${files.length} files in this view. Continue?`)) return;
+            }
+            triggerDownloads(files);
         };
 
         window.addEventListener('hashchange', () => {
