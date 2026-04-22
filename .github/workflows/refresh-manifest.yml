@@ -50,9 +50,13 @@ jobs:
                       "last_modified": obj["LastModified"].isoformat(),
                   })
 
+          EXCLUDED = {"index.html"}
+
           entries = []
           for obj in objects:
               if obj["size"] == 0 and obj["key"].endswith("/"):
+                  continue
+              if obj["key"].split("/")[-1].lower() in EXCLUDED:
                   continue
               url = s3.generate_presigned_url(
                   "get_object",
