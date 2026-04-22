@@ -466,6 +466,9 @@
                 const resp = await fetch('manifest.json?' + Date.now());
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 manifest = await resp.json();
+                manifest.files = manifest.files.filter(f => f.key !== 'index.html' && !f.key.endsWith('/index.html'));
+                manifest.total_files = manifest.files.length;
+                manifest.total_size = manifest.files.reduce((sum, f) => sum + f.size, 0);
                 updateMetaBar();
                 const hash = window.location.hash.slice(1);
                 navigateTo(hash || '');
@@ -545,6 +548,19 @@
                 }
                 return sortAsc ? cmp : -cmp;
             });
+        }
+
+        function getAllFilesUnderPrefix(prefix) {
+            if (!manifest) return [];
+            return manifest.files.filter(entry =>
+                entry.key.startsWith(prefix) && entry.size > 0 && !entry.key.endsWith('/')
+            ).map(entry => ({
+                name: entry.key.split('/').pop(),
+                key: entry.key,
+                size: entry.size,
+                lastModified: entry.last_modified,
+                downloadUrl: entry.download_url
+            }));
         }
 
         function formatFileSize(bytes) {
@@ -714,15 +730,19 @@
             }
 
             folders.forEach(folder => {
-                html += `<tr>
-                    <td class="checkbox-cell"></td>
+                const folderFiles = getAllFilesUnderPrefix(folder.prefix);
+                const folderSize = folderFiles.reduce((sum, f) => sum + f.size, 0);
+                const allSelected = folderFiles.length > 0 && folderFiles.every(f => selectedFiles.has(f.key));
+                const escapedPrefix = folder.prefix.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                html += `<tr class="${allSelected ? 'selected' : ''}">
+                    <td class="checkbox-cell"><input type="checkbox" ${allSelected ? 'checked' : ''} onchange="handleFolderCheckbox('${escapedPrefix}', this.checked)"></td>
                     <td><div class="name-cell">
                         <span class="icon folder-icon">📁</span>
                         <a onclick="navigateTo('${folder.prefix}')">${folder.name}</a>
                     </div></td>
-                    <td class="size-cell">-</td>
+                    <td class="size-cell">${folderFiles.length} file${folderFiles.length !== 1 ? 's' : ''}, ${formatFileSize(folderSize)}</td>
                     <td class="date-cell">-</td>
-                    <td></td>
+                    <td class="download-cell"><a href="javascript:void(0)" onclick="handleDownloadFolder('${escapedPrefix}')">Download</a></td>
                 </tr>`;
             });
 
@@ -849,6 +869,26 @@
                 if (!confirm(`You are about to download all ${files.length} files in this view. Continue?`)) return;
             }
             triggerDownloads(files);
+        };
+
+        window.handleFolderCheckbox = function(prefix, checked) {
+            const folderFiles = getAllFilesUnderPrefix(prefix);
+            if (checked) {
+                folderFiles.forEach(f => selectedFiles.set(f.key, f));
+            } else {
+                folderFiles.forEach(f => selectedFiles.delete(f.key));
+            }
+            renderContent();
+        };
+
+        window.handleDownloadFolder = function(prefix) {
+            const folderFiles = getAllFilesUnderPrefix(prefix);
+            if (folderFiles.length === 0) return;
+            if (folderFiles.length > 20) {
+                const totalSize = folderFiles.reduce((sum, f) => sum + f.size, 0);
+                if (!confirm(`This folder contains ${folderFiles.length} files (${formatFileSize(totalSize)}). Download all?`)) return;
+            }
+            triggerDownloads(folderFiles);
         };
 
         window.addEventListener('hashchange', () => {
